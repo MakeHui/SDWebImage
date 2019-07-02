@@ -12,6 +12,37 @@
 #import "UIImage+Metadata.h"
 #import "SDWebImageError.h"
 #import "SDInternalMacros.h"
+#import "NSURL+URLQueryBuilder.h"
+
+NSString * const SDDiskCacheImageWidthKey = @"SDDiskCacheImageWidthKey";
+NSString * const SDDiskCacheImageHeightKey = @"SDDiskCacheImageHeightKey";
+NSString * const SDDiskCacheImageRatioKey = @"SDDiskCacheImageRatioKey";
+NSString * const SDDiskCacheImageQualityKey = @"SDDiskCacheImageQualityKey";
+
+NSURL * _Nullable SDDiskCacheImage(CGFloat width, CGFloat height, CGFloat quality, NSURL * _Nonnull URL) {
+    return [URL ars_queryElements:@{ SDDiskCacheImageWidthKey: @(width).stringValue,
+                                     SDDiskCacheImageHeightKey: @(height).stringValue,
+                                     SDDiskCacheImageQualityKey: @(quality).stringValue }];
+}
+
+NSURL * _Nullable SDDiskCacheImageWithWidth(CGFloat width, CGFloat quality, NSURL * _Nonnull URL) {
+    return [URL ars_queryElements:@{ SDDiskCacheImageWidthKey: @(width).stringValue,
+                                     SDDiskCacheImageQualityKey: @(quality).stringValue }];
+}
+
+NSURL * _Nullable SDDiskCacheImageWithHeigt(CGFloat height, CGFloat quality, NSURL * _Nonnull URL) {
+    return [URL ars_queryElements:@{ SDDiskCacheImageHeightKey: @(height).stringValue,
+                                     SDDiskCacheImageQualityKey: @(quality).stringValue }];
+}
+
+NSURL * _Nullable SDDiskCacheImageWithRatio(CGFloat ratio, CGFloat quality, NSURL * _Nonnull URL) {
+    return [URL ars_queryElements:@{ SDDiskCacheImageRatioKey: @(ratio).stringValue,
+                                     SDDiskCacheImageQualityKey: @(quality).stringValue }];
+}
+
+NSURL * _Nullable SDDiskCacheImageWithQuality(CGFloat quality, NSURL * _Nonnull URL) {
+    return [URL ars_queryElements:@{ SDDiskCacheImageQualityKey: @(quality).stringValue }];
+}
 
 static id<SDImageCache> _defaultImageCache;
 static id<SDImageLoader> _defaultImageLoader;
@@ -297,45 +328,104 @@ static id<SDImageLoader> _defaultImageLoader;
     NSString *key = [self cacheKeyForURL:url cacheKeyFilter:cacheKeyFilter];
     id<SDImageTransformer> transformer = context[SDWebImageContextImageTransformer];
     id<SDWebImageCacheSerializer> cacheSerializer = context[SDWebImageContextCacheSerializer];
+    @weakify(downloadedImage);
     if (downloadedImage && (!downloadedImage.sd_isAnimated || (options & SDWebImageTransformAnimatedImage)) && transformer) {
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            @strongify(downloadedImage);
             @autoreleasepool {
                 UIImage *transformedImage = [transformer transformedImageWithImage:downloadedImage forKey:key];
+                NSString *cacheKey;
+                NSData *cacheData;
                 if (transformedImage && finished) {
                     NSString *transformerKey = [transformer transformerKey];
-                    NSString *cacheKey = SDTransformedKeyForKey(key, transformerKey);
+                    cacheKey = SDTransformedKeyForKey(key, transformerKey);
                     BOOL imageWasTransformed = ![transformedImage isEqual:downloadedImage];
-                    NSData *cacheData;
                     // pass nil if the image was transformed, so we can recalculate the data from the image
                     if (cacheSerializer && (storeCacheType == SDImageCacheTypeDisk || storeCacheType == SDImageCacheTypeAll)) {
                         cacheData = [cacheSerializer cacheDataWithImage:transformedImage  originalData:(imageWasTransformed ? nil : downloadedData) imageURL:url];
                     } else {
                         cacheData = (imageWasTransformed ? nil : downloadedData);
                     }
-                    [self.imageCache storeImage:transformedImage imageData:cacheData forKey:cacheKey cacheType:storeCacheType completion:nil];
                 }
                 
+                cacheKey = cacheKey ?: key;
+                cacheData = cacheData ?: downloadedData;
+                
+                [self compressWithImage:&downloadedImage data:&cacheData forKey:key];
+                [self.imageCache storeImage:transformedImage imageData:cacheData forKey:cacheKey cacheType:storeCacheType completion:nil];
                 [self callCompletionBlockForOperation:operation completion:completedBlock image:transformedImage data:downloadedData error:nil cacheType:SDImageCacheTypeNone finished:finished url:url];
             }
         });
     } else {
-        if (downloadedImage && finished) {
-            if (cacheSerializer && (storeCacheType == SDImageCacheTypeDisk || storeCacheType == SDImageCacheTypeAll)) {
-                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-                    @autoreleasepool {
-                        NSData *cacheData = [cacheSerializer cacheDataWithImage:downloadedImage originalData:downloadedData imageURL:url];
-                        [self.imageCache storeImage:downloadedImage imageData:cacheData forKey:key cacheType:storeCacheType completion:nil];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            @strongify(downloadedImage);
+            @autoreleasepool {
+                NSData *cacheData = nil;
+                if (downloadedImage && finished) {
+                    if (cacheSerializer && (storeCacheType == SDImageCacheTypeDisk || storeCacheType == SDImageCacheTypeAll)) {
+                        cacheData = [cacheSerializer cacheDataWithImage:downloadedImage originalData:downloadedData imageURL:url];
                     }
-                });
-            } else {
+                }
+                
+                cacheData = cacheData ?: downloadedData;
+                
+                [self compressWithImage:&downloadedImage data:&cacheData forKey:key];
                 [self.imageCache storeImage:downloadedImage imageData:downloadedData forKey:key cacheType:storeCacheType completion:nil];
+                [self callCompletionBlockForOperation:operation completion:completedBlock image:downloadedImage data:cacheData error:nil cacheType:SDImageCacheTypeNone finished:finished url:url];
             }
-        }
-        [self callCompletionBlockForOperation:operation completion:completedBlock image:downloadedImage data:downloadedData error:nil cacheType:SDImageCacheTypeNone finished:finished url:url];
+        });
     }
 }
 
 #pragma mark - Helper
+
+- (void)compressWithImage:(UIImage **)image data:(NSData **)data forKey:(NSString *)key {
+    NSDictionary *parameter = [NSURL ars_queryDictionaryWithURL:[NSURL URLWithString:key]];
+    if (parameter[SDDiskCacheImageWidthKey] || parameter[SDDiskCacheImageHeightKey] ||
+        parameter[SDDiskCacheImageRatioKey] || parameter[SDDiskCacheImageQualityKey]) {
+        NSData *compData = [self compressWithData:*data parameter:parameter];
+        NSLog(@"xxx url: %@ data: %@ compData: %@", key, @((*data).length), @(compData.length));
+        if (compData.length < (*data).length) {
+            *data = compData;
+            *image = [UIImage imageWithData:*data];
+        }
+    }
+}
+
+- (UIImage *)imageWithImage:(UIImage *)image scaledToSize:(CGSize)newSize {
+    UIGraphicsBeginImageContextWithOptions(newSize, NO, 0.0);
+    [image drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
+    UIImage *newImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    return newImage;
+}
+
+- (NSData *)compressWithData:(NSData *)data parameter:(NSDictionary *)parameter {
+    UIImage *image = [UIImage imageWithData:data];
+    
+    if (parameter[SDDiskCacheImageRatioKey]) {
+        CGFloat ratio = [parameter[SDDiskCacheImageRatioKey] floatValue];
+        image = [self imageWithImage:image scaledToSize:CGSizeMake(image.size.width * ratio, image.size.height * ratio)];
+    }
+    else if (parameter[SDDiskCacheImageWidthKey] && parameter[SDDiskCacheImageHeightKey]) {
+        CGFloat width = [parameter[SDDiskCacheImageWidthKey] floatValue];
+        CGFloat height = [parameter[SDDiskCacheImageHeightKey] floatValue];
+        image = [self imageWithImage:image scaledToSize:CGSizeMake(width, height)];
+    }
+    else if (parameter[SDDiskCacheImageWidthKey]) {
+        CGFloat width = [parameter[SDDiskCacheImageWidthKey] floatValue];
+        image = [self imageWithImage:image scaledToSize:CGSizeMake(width, width / image.size.width * image.size.height)];
+    }
+    else if (parameter[SDDiskCacheImageHeightKey]) {
+        CGFloat height = [parameter[SDDiskCacheImageHeightKey] floatValue];
+        image = [self imageWithImage:image scaledToSize:CGSizeMake(height / image.size.height * image.size.width, height)];
+    }
+    
+    CGFloat quality = [parameter[SDDiskCacheImageQualityKey] floatValue];
+    
+    return UIImageJPEGRepresentation(image, quality);
+}
 
 - (void)safelyRemoveOperationFromRunning:(nullable SDWebImageCombinedOperation*)operation {
     if (!operation) {

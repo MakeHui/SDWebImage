@@ -14,6 +14,12 @@
 #import "SDWebImageCacheKeyFilter.h"
 #import "SDWebImageCacheSerializer.h"
 
+NSURL * _Nullable SDDiskCacheImage(CGFloat width, CGFloat height, CGFloat quality, NSURL * _Nonnull URL);
+NSURL * _Nullable SDDiskCacheImageWithWidth(CGFloat width, CGFloat quality, NSURL * _Nonnull URL);
+NSURL * _Nullable SDDiskCacheImageWithHeigt(CGFloat height, CGFloat quality, NSURL * _Nonnull URL);
+NSURL * _Nullable SDDiskCacheImageWithRatio(CGFloat ratio, CGFloat quality, NSURL * _Nonnull URL);
+NSURL * _Nullable SDDiskCacheImageWithQuality(CGFloat quality, NSURL * _Nonnull URL);
+
 typedef void(^SDExternalCompletionBlock)(UIImage * _Nullable image, NSError * _Nullable error, SDImageCacheType cacheType, NSURL * _Nullable imageURL);
 
 typedef void(^SDInternalCompletionBlock)(UIImage * _Nullable image, NSData * _Nullable data, NSError * _Nullable error, SDImageCacheType cacheType, BOOL finished, NSURL * _Nullable imageURL);
