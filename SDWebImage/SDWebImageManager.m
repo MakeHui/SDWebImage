@@ -64,6 +64,7 @@ static id<SDImageLoader> _defaultImageLoader;
 @property (strong, nonatomic, nonnull) dispatch_semaphore_t failedURLsLock; // a lock to keep the access to `failedURLs` thread-safe
 @property (strong, nonatomic, nonnull) NSMutableSet<SDWebImageCombinedOperation *> *runningOperations;
 @property (strong, nonatomic, nonnull) dispatch_semaphore_t runningOperationsLock; // a lock to keep the access to `runningOperations` thread-safe
+@property (strong, nonatomic, nonnull) NSArray *compressKeys;
 
 @end
 
@@ -351,8 +352,7 @@ static id<SDImageLoader> _defaultImageLoader;
                 cacheKey = cacheKey ?: key;
                 cacheData = cacheData ?: downloadedData;
                 
-                [self compressWithImage:&downloadedImage data:&cacheData forKey:key];
-                [self.imageCache storeImage:transformedImage imageData:cacheData forKey:cacheKey cacheType:storeCacheType completion:nil];
+                [self imageCacheWithStoreImage:&transformedImage imageData:&cacheData forKey:cacheKey cacheType:storeCacheType];
                 [self callCompletionBlockForOperation:operation completion:completedBlock image:transformedImage data:downloadedData error:nil cacheType:SDImageCacheTypeNone finished:finished url:url];
             }
         });
@@ -369,26 +369,49 @@ static id<SDImageLoader> _defaultImageLoader;
                 
                 cacheData = cacheData ?: downloadedData;
                 
-                [self compressWithImage:&downloadedImage data:&cacheData forKey:key];
-                [self.imageCache storeImage:downloadedImage imageData:downloadedData forKey:key cacheType:storeCacheType completion:nil];
+                [self imageCacheWithStoreImage:&downloadedImage imageData:&cacheData forKey:key cacheType:storeCacheType];
                 [self callCompletionBlockForOperation:operation completion:completedBlock image:downloadedImage data:cacheData error:nil cacheType:SDImageCacheTypeNone finished:finished url:url];
             }
         });
     }
 }
 
+- (void)imageCacheWithStoreImage:(UIImage **)image imageData:(NSData **)imageData forKey:(nullable NSString *)key cacheType:(SDImageCacheType)cacheType {
+    NSDictionary *parameter = [key ars_queryDictionary];
+    
+    if ([self isCompressWithParameter:parameter]) {
+        NSString *originkey = [key ars_removeQueryKeys:self.compressKeys];
+        [self.imageCache storeImage:*image imageData:*imageData forKey:originkey cacheType:cacheType completion:nil];
+        [self compressWithImage:image data:imageData parameter:parameter];
+        [self.imageCache storeImage:*image imageData:*imageData forKey:key cacheType:cacheType completion:nil];
+    }
+    else {
+        [self.imageCache storeImage:*image imageData:*imageData forKey:key cacheType:cacheType completion:nil];
+    }
+}
+
 #pragma mark - Helper
 
-- (void)compressWithImage:(UIImage **)image data:(NSData **)data forKey:(NSString *)key {
-    NSDictionary *parameter = [NSURL ars_queryDictionaryWithURL:[NSURL URLWithString:key]];
-    if (parameter[SDDiskCacheImageWidthKey] || parameter[SDDiskCacheImageHeightKey] ||
-        parameter[SDDiskCacheImageRatioKey] || parameter[SDDiskCacheImageQualityKey]) {
-        NSData *compData = [self compressWithData:*data parameter:parameter];
-        NSLog(@"xxx url: %@ data: %@ compData: %@", key, @((*data).length), @(compData.length));
-        if (compData.length < (*data).length) {
-            *data = compData;
-            *image = [UIImage imageWithData:*data];
-        }
+- (BOOL)isCompressWithParameter:(NSDictionary *)parameter
+{
+    return (parameter[SDDiskCacheImageWidthKey] || parameter[SDDiskCacheImageHeightKey] ||
+            parameter[SDDiskCacheImageRatioKey] || parameter[SDDiskCacheImageQualityKey]);
+}
+
+- (NSArray *)compressKeys
+{
+    if (_compressKeys == nil) {
+        _compressKeys = @[ SDDiskCacheImageWidthKey, SDDiskCacheImageHeightKey,
+                           SDDiskCacheImageRatioKey, SDDiskCacheImageQualityKey ];
+    }
+    return _compressKeys;
+}
+
+- (void)compressWithImage:(UIImage **)image data:(NSData **)data parameter:(NSDictionary *)parameter {
+    NSData *compData = [self compressWithData:*data parameter:parameter]; 
+    if (compData.length < (*data).length) {
+        *data = compData;
+        *image = [UIImage imageWithData:*data];
     }
 }
 
